@@ -256,8 +256,27 @@ def solve(cfg: DictConfig) -> Optional[float]:
     size_to_time = {int(k): float(v) for k, v in size_to_time.items()}
     runtime_sweep = solver_cfg.get("runtime_sweep_s")  # None | list[float]
 
+    # Optional subset: solve only the first N instances of the test set.
+    # Use case: mono-thread sanity check, where solving the full 1000 at
+    # t=60s takes ~16h. Per-instance energy is the relevant quantity for
+    # AET; a subset gives the same point estimate with std-error / sqrt(k)
+    # wider CI. The subset is applied identically across thread modes
+    # and budgets so the sample is consistent across the sweep.
+    subset_n = solver_cfg.get("subset_n", None)
+    if subset_n is not None:
+        subset_n = int(subset_n)
+
     for file in (pbar := tqdm(data_files, desc="Solving with " + solver)):
         td_test = load_npz_to_tensordict(file)
+        if subset_n is not None and subset_n > 0:
+            full_n = td_test.batch_size[0] if td_test.batch_size else len(td_test)
+            if subset_n < full_n:
+                td_test = td_test[:subset_n]
+                log.info(
+                    f"Using subset_n={subset_n}/{full_n} for {file}; "
+                    f"multiply reported totals by {full_n / subset_n:.4g} "
+                    f"to extrapolate to the full set."
+                )
         demand_key = "demand" if "demand" in td_test.keys() else "demand_linehaul"
         num_problems, size = td_test[demand_key].shape
 
@@ -272,12 +291,19 @@ def solve(cfg: DictConfig) -> Optional[float]:
         for mode_name, num_procs in thread_modes:
             for budget in budgets:
                 budget_tag = f"_t{int(round(budget))}" if len(budgets) > 1 else ""
+                # Tag the solution file with the subset size so a partial
+                # mono run does not overwrite the full multi solution.
+                subset_tag = (
+                    f"_sub{int(num_problems)}"
+                    if subset_n is not None and subset_n > 0
+                    else ""
+                )
                 sol_suffix = (
                     f"_{solver}_{mode_name}{budget_tag}"
                     if len(thread_modes) > 1 or len(budgets) > 1
                     else f"_{solver}"
                 )
-                sol_path = file.replace(".npz", f"_sol{sol_suffix}.npz")
+                sol_path = file.replace(".npz", f"_sol{sol_suffix}{subset_tag}.npz")
                 if os.path.exists(sol_path):
                     try:
                         sol = load_npz_to_tensordict(sol_path)
