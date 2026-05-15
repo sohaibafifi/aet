@@ -1,16 +1,19 @@
-"""Generate CVRP train / val / test instance files.
+"""Generate the CVRP test instance file.
 
-Wraps the CVRP generator from rl4co and writes compressed .npz files
-under ``data/cvrp/``. Run before ``cvrp.train`` / ``cvrp.test`` /
-``cvrp.solvers`` to materialize the instances on disk; rl4co will also
-generate on demand the first time a missing file is referenced, but an
-explicit one-shot generator makes seeds and counts auditable.
+The training loop samples fresh instances every epoch via
+``env.dataset(train_data_size, phase="train")``; the validation loop
+likewise re-samples fresh val instances each fit() setup. Only the
+test set is persisted on disk, so the same instances are used by both
+the neural solver (``cvrp.test``) and the HGS baseline
+(``cvrp.solvers``) when reporting AET numbers.
+
+Output file is written under ``data/<env_name>/`` and skipped if
+already present.
 
 Usage:
-    python scripts/generate_data.py                 # uses configs/config.yaml
-    python scripts/generate_data.py env.generator_params.num_loc=20
-    python scripts/generate_data.py seed=1234 \\
-        model.train_data_size=5_000 model.val_data_size=200
+    python scripts/generate_data.py                          # use config defaults
+    python scripts/generate_data.py env.generator_params.num_loc=100
+    python scripts/generate_data.py seed=1234 model.test_data_size=500
 """
 from __future__ import annotations
 
@@ -46,22 +49,18 @@ def generate(cfg: DictConfig) -> Optional[float]:
     out_dir = os.path.join("data", env_name)
     os.makedirs(out_dir, exist_ok=True)
 
-    splits = {
-        "train": cfg.model.get("train_data_size"),
-        "val":   cfg.model.get("val_data_size"),
-        "test":  cfg.model.get("test_data_size"),
-    }
-
-    for split, size in splits.items():
-        if not size:
-            continue
-        path = os.path.join(out_dir, f"{split}_{num_loc}.npz")
+    # Training and validation data are sampled fresh by rl4co at setup
+    # / per epoch; only the test set is persisted to keep the neural
+    # solver and the HGS baseline running on the exact same instances.
+    size = cfg.model.get("test_data_size")
+    if size:
+        path = os.path.join(out_dir, f"test_{num_loc}.npz")
         if os.path.exists(path):
             log.info(f"[skip] {path} already exists ({size} samples expected)")
-            continue
-        log.info(f"[gen]  {path} ({size} samples)")
-        td = env.generator(size)
-        save_tensordict_to_npz(td, path, compress=True)
+        else:
+            log.info(f"[gen]  {path} ({size} samples)")
+            td = env.generator(size)
+            save_tensordict_to_npz(td, path, compress=True)
 
     log.info("Done.")
     return None
