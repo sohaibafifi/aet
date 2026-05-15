@@ -117,9 +117,21 @@ def run(cfg: DictConfig) -> Tuple[dict, dict]:
         log.warning("Best ckpt not found! ")
         return {}, object_dict
 
-    model.load_state_dict(
-        torch.load(ckpt_path, map_location="cpu", weights_only=False)["state_dict"]
-    )
+    # Training checkpoints contain a REINFORCE rollout-baseline copy of the
+    # policy under "baseline.baseline.policy.*"; it is not needed for
+    # inference. Drop it and load non-strict to tolerate any other
+    # training-only keys (e.g. optimizer/baseline buffers).
+    raw_state = torch.load(ckpt_path, map_location="cpu", weights_only=False)[
+        "state_dict"
+    ]
+    inference_state = {
+        k: v for k, v in raw_state.items() if not k.startswith("baseline.")
+    }
+    missing, unexpected = model.load_state_dict(inference_state, strict=False)
+    if missing:
+        log.warning(f"Missing keys when loading checkpoint: {missing}")
+    if unexpected:
+        log.warning(f"Unexpected keys when loading checkpoint: {unexpected}")
     results = dict()
 
     model = model.eval().to(device)
