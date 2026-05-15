@@ -16,6 +16,8 @@ from typing import Optional
 
 import hydra
 import lightning as L
+import numpy as np
+import torch
 
 from omegaconf import DictConfig
 from rl4co import utils
@@ -26,6 +28,126 @@ from tqdm.auto import tqdm
 from aet.energy import EnergyTracker
 
 log = utils.get_pylogger(__name__)
+
+# ----------------------------------------------------------------------
+# Pure-CVRP PyVRP wrapper. We call PyVRP directly,
+# using a process pool for batched parallelism across instances.
+#
+# Integer scaling conventions:
+#   - coordinates are sampled in [0, 1]; we scale by 1e6 so PyVRP's
+#     internal integer distance matrix has enough resolution.
+#   - demands and vehicle capacity are integers in the CVRP convention
+#     (capacity = 40 for n=50, demands sampled in 1..10). Generator
+#     stores demand as (demand_int / capacity); we recover the integer
+#     via round(demand_norm * capacity).
+# ----------------------------------------------------------------------
+PYVRP_COORD_SCALE = 1_000_000  # 1e6
+
+
+def _pyvrp_solve_one(args):
+    """Solve a single CVRP instance with PyVRP. Returns (action, cost).
+
+    `action` is the giant-tour representation expected by rl4co's
+    get_reward (a list of node indices starting with the depot, with
+    a 0 inserted between routes).
+    `cost` is the unscaled tour length (sum of Euclidean distances).
+    """
+    coords_np, depot_np, demand_int_np, capacity_int, max_runtime = args
+
+    # Lazy import inside the worker so multiprocessing on `spawn` /
+    # `forkserver` start methods does not pickle pyvrp at the parent.
+    from pyvrp import Client, Depot, ProblemData, VehicleType
+    from pyvrp import solve as pyvrp_solve
+    from pyvrp.stop import MaxRuntime
+
+    num_clients = demand_int_np.shape[0]
+
+    # Build scaled-integer distance matrix (depot is node 0).
+    full_coords = np.concatenate([depot_np[None, :], coords_np], axis=0)
+    scaled = np.round(full_coords * PYVRP_COORD_SCALE).astype(np.int64)
+    diff = scaled[:, None, :] - scaled[None, :, :]
+    dist_int = np.round(np.sqrt((diff.astype(np.float64) ** 2).sum(-1))).astype(np.int64)
+
+    depot = Depot(x=int(scaled[0, 0]), y=int(scaled[0, 1]))
+    clients = [
+        Client(
+            x=int(scaled[i + 1, 0]),
+            y=int(scaled[i + 1, 1]),
+            delivery=[int(demand_int_np[i])],
+        )
+        for i in range(num_clients)
+    ]
+    vehicle = VehicleType(
+        num_available=num_clients,
+        capacity=[int(capacity_int)],
+    )
+    data = ProblemData(
+        clients=clients,
+        depots=[depot],
+        vehicle_types=[vehicle],
+        distance_matrices=[dist_int],
+        duration_matrices=[np.zeros_like(dist_int)],
+    )
+
+    result = pyvrp_solve(data, stop=MaxRuntime(float(max_runtime)))
+    sol = result.best
+    # Giant-tour action: concat routes separated by 0 (depot).
+    action: list[int] = []
+    for route in sol.routes():
+        action.extend(route.visits())
+        action.append(0)
+    # Unscale cost back to original coordinate units.
+    cost = float(result.cost()) / PYVRP_COORD_SCALE
+    return action, cost
+
+
+def _pyvrp_solve_batch(td_test, max_runtime: float, num_procs: int):
+    """Solve every instance in a CVRP TensorDict with PyVRP.
+
+    Returns:
+        actions: padded LongTensor of shape (N, T_max) padded with 0.
+        costs:   FloatTensor of shape (N,) (tour lengths, lower is better).
+    """
+    locs = td_test["locs"].cpu().numpy()  # (N, K, 2)
+    depots = td_test["depot"].cpu().numpy()  # (N, 2)
+    demand_norm = td_test["demand"].cpu().numpy()  # (N, K) normalized
+    capacity = td_test["capacity"].cpu().numpy()  # (N, 1) or (N,)
+    capacity = capacity.reshape(capacity.shape[0], -1)[:, 0]  # (N,)
+
+    # Recover integer demand: saved as int / capacity.
+    demand_int = np.round(demand_norm * capacity[:, None]).astype(np.int64)
+    capacity_int = np.round(capacity).astype(np.int64)
+
+    n_instances = locs.shape[0]
+    work = [
+        (locs[i], depots[i], demand_int[i], int(capacity_int[i]), max_runtime)
+        for i in range(n_instances)
+    ]
+
+    if num_procs > 1:
+        with multiprocessing.Pool(processes=int(num_procs)) as pool:
+            results = list(
+                tqdm(
+                    pool.imap(_pyvrp_solve_one, work),
+                    total=n_instances,
+                    desc=f"PyVRP procs={num_procs} t={max_runtime}s",
+                    leave=False,
+                )
+            )
+    else:
+        results = [
+            _pyvrp_solve_one(w)
+            for w in tqdm(work, desc=f"PyVRP mono t={max_runtime}s", leave=False)
+        ]
+
+    # Pad actions to a fixed length tensor.
+    actions = [r[0] for r in results]
+    costs = torch.tensor([r[1] for r in results], dtype=torch.float32)
+    t_max = max(len(a) for a in actions) if actions else 0
+    actions_pad = torch.zeros((n_instances, t_max), dtype=torch.long)
+    for i, a in enumerate(actions):
+        actions_pad[i, : len(a)] = torch.tensor(a, dtype=torch.long)
+    return actions_pad, costs
 
 # Fallback per-size HGS time budget (seconds). Overridden by
 # solver_cfg.size_to_time_s in config.yaml; only used when that field is
@@ -196,14 +318,19 @@ def solve(cfg: DictConfig) -> Optional[float]:
 
                 start = time.time()
                 with tracker:
-                    td_local = env.reset(td_test.clone())
-                    actions_solver, costs_solver = env.solve(
-                        td_local,
-                        max_runtime=budget,
-                        num_procs=num_procs,
-                        solver=solver,
-                    )
-                    rewards_solver = env.get_reward(td_local.clone(), actions_solver)
+                    if solver == "pyvrp":
+                        actions_solver, costs_solver = _pyvrp_solve_batch(
+                            td_test, max_runtime=budget, num_procs=num_procs
+                        )
+                        # cost is tour length; reward convention in this
+                        # repo is negative cost (consistent with rl4co).
+                        rewards_solver = -costs_solver
+                    else:
+                        raise NotImplementedError(
+                            f"solver={solver!r} not supported; only 'pyvrp' is "
+                            f"wired up. Add a wrapper analogous to "
+                            f"_pyvrp_solve_batch."
+                        )
                     tracker.n_items = int(num_problems)
                 total_time = time.time() - start
 
