@@ -141,7 +141,7 @@ All numerical values in the paper are produced by the pipeline above. To reprodu
 - Hardware: a single GPU (logged as `generic-gpu`) for training and inference; multi-threaded HGS baseline on the same node's CPU.
 - Software: Python 3.12, PyTorch 2.8.0, Lightning 2.6.1, rl4co 0.6.0, PyVRP 0.10.
 - Seeds: 1, 2, 3, 4, 5 (handled by `train_seeded.sh`).
-- HGS time budget: 10 s per instance (n=50).
+- HGS time budget: 60 s per instance (n=50).
 
 ---
 
