@@ -779,13 +779,24 @@ def _csv_to_rows(df) -> list[dict]:
             f"warn: CSV missing columns {missing}; sweep figures may degrade\n"
         )
 
+    # aet_eval.py aggregates across seeds and writes NaN in the per-row
+    # seed column; pandas' default dropna=True groupby would then drop
+    # every row. We use dropna=False and treat missing seed as a single
+    # pooled bucket downstream.
     rows: list[dict] = []
-    for keys, sub in df.groupby(key_cols):
+    if "seed" in df.columns and df["seed"].isna().all():
+        df = df.assign(seed=-1)
+    for keys, sub in df.groupby(key_cols, dropna=False):
         if has_budget:
             hardware_id, batch_size, delta_pct, seed, budget = keys
         else:
             hardware_id, batch_size, delta_pct, seed = keys
             budget = float("nan")
+        # Coerce a NaN seed (mixed CSVs) to a sentinel int.
+        try:
+            seed = int(seed)
+        except (TypeError, ValueError):
+            seed = -1
         sub_mono  = sub[sub["threads_mode"] == "mono"]
         sub_multi = sub[sub["threads_mode"] == "multi"]
         if sub_mono.empty and sub_multi.empty:
@@ -799,7 +810,7 @@ def _csv_to_rows(df) -> list[dict]:
             "hardware":   str(any_row.get("hardware_id", hardware_id)),
             "batch":      int(batch_size),
             "delta_pct":  float(delta_pct),
-            "seed":       int(seed),
+            "seed":       seed,
             "budget_s":   float(budget) if budget == budget else float("nan"),  # NaN-safe
             "E_train_wh": float(any_row["E_train_wh_median"]),
             "E_NN_wh_per_inst":         float(any_row["E_NN_wh_per_inst"]),

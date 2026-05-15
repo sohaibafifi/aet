@@ -313,7 +313,7 @@ def plot_aet_by_delta(df: pd.DataFrame, out_path: str) -> None:
             continue
         ax.plot(finite["delta_pct"], finite["aet_E"], marker="o",
                 label=f"batch={batch}, {threads}")
-    ax.set_xlabel("δ (gap toléré, %)")
+    ax.set_xlabel("δ (tolerated gap, %)")
     ax.set_ylabel("AET_E (instances)")
     ax.set_yscale("log")
     ax.set_title("AET vs δ")
@@ -339,11 +339,11 @@ def plot_aet_by_batch(df: pd.DataFrame, out_path: str) -> None:
             continue
         ax.plot(finite["batch_size"], finite["aet_E"], marker="o",
                 label=f"δ={delta}%, {threads}")
-    ax.set_xlabel("Taille de batch")
+    ax.set_xlabel("Batch size")
     ax.set_ylabel("AET_E (instances)")
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_title("AET vs taille de batch")
+    ax.set_title("AET vs batch size")
     ax.grid(True, which="both", alpha=0.3)
     if ax.has_data():
         ax.legend(fontsize=8)
@@ -354,13 +354,13 @@ def plot_aet_by_batch(df: pd.DataFrame, out_path: str) -> None:
 def plot_aet_by_size(df: pd.DataFrame, out_path: str) -> None:
     fig, ax = plt.subplots(figsize=(7, 5))
     if df.empty or "size" not in df.columns:
-        ax.set_title("AET vs taille — no data")
+        ax.set_title("AET vs size — no data")
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return
     sub = df[df["feasible"]]
     if sub.empty:
-        ax.set_title("AET vs taille — pas de combinaison faisable")
+        ax.set_title("AET vs size — no feasible combination")
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return
@@ -373,10 +373,10 @@ def plot_aet_by_size(df: pd.DataFrame, out_path: str) -> None:
         g = g.sort_values("size")
         ax.plot(g["size"], g["aet_med"], marker="o", label=f"{threads}")
         ax.fill_between(g["size"], g["aet_p25"], g["aet_p75"], alpha=0.2)
-    ax.set_xlabel("Taille du problème")
+    ax.set_xlabel("Problem size")
     ax.set_ylabel("AET_E (instances)")
     ax.set_yscale("log")
-    ax.set_title("AET vs taille (médiane + IQR multi-seed)")
+    ax.set_title("AET vs size (median + IQR multi-seed)")
     ax.grid(True, which="both", alpha=0.3)
     if ax.has_data():
         ax.legend(fontsize=8)
@@ -393,16 +393,16 @@ def plot_threads_bars(df: pd.DataFrame, out_path: str) -> None:
         return
     sub = df[df["feasible"]].copy()
     if sub.empty:
-        ax.set_title("AET mono vs multi — aucune combinaison faisable")
+        ax.set_title("AET mono vs multi — no feasible combination")
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return
     pivot = sub.groupby(["size", "threads_mode"])["aet_E"].median().unstack()
     pivot.plot(kind="bar", ax=ax)
-    ax.set_xlabel("Taille du problème")
-    ax.set_ylabel("AET_E (instances) — médiane")
+    ax.set_xlabel("Problem size")
+    ax.set_ylabel("AET_E (instances) — median")
     ax.set_yscale("log")
-    ax.set_title("AET selon le budget de threads de la baseline")
+    ax.set_title("AET by baseline thread budget")
     ax.grid(True, axis="y", which="both", alpha=0.3)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -413,14 +413,14 @@ def plot_asymptotic_overview(df: pd.DataFrame, train_agg: TrainAggregate,
     """Plot cumulative training+inference energy vs N for NN and the baseline."""
     fig, ax = plt.subplots(figsize=(7, 5))
     if df.empty:
-        ax.set_title("Asymptotique — no data")
+        ax.set_title("Asymptotic regime — no data")
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return
     N = [10 ** k for k in range(0, 10)]
     feas = df[df["feasible"]]
     if feas.empty:
-        ax.set_title("Asymptotique — pas de combinaison faisable")
+        ax.set_title("Asymptotic regime — no feasible combination")
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         return
@@ -430,13 +430,13 @@ def plot_asymptotic_overview(df: pd.DataFrame, train_agg: TrainAggregate,
 
     nn_curve = [(e_train or 0.0) + (e_nn or 0.0) * n for n in N]
     meta_curve = [(e_meta or 0.0) * n for n in N]
-    ax.plot(N, nn_curve, marker="o", label=f"NN (E_train={e_train:.1f} Wh + N×{e_nn:.2e})")
-    ax.plot(N, meta_curve, marker="s", label=f"Métaheuristique (N×{e_meta:.2e})")
+    ax.plot(N, nn_curve, marker="o", label=f"NN (E_train={e_train:.1f} Wh + N x {e_nn:.2e})")
+    ax.plot(N, meta_curve, marker="s", label=f"Metaheuristic (N x {e_meta:.2e})")
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("N (instances déployées)")
-    ax.set_ylabel("Énergie cumulée (Wh)")
-    ax.set_title("Régime asymptotique : NN vs métaheuristique")
+    ax.set_xlabel("N (deployed instances)")
+    ax.set_ylabel("Cumulative energy (Wh)")
+    ax.set_title("Asymptotic regime: NN vs metaheuristic")
     ax.grid(True, which="both", alpha=0.3)
     ax.legend()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
