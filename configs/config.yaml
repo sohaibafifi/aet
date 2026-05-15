@@ -156,3 +156,15 @@ solver_cfg:
   name:             pyvrp
   threads_mode:     both           # mono | multi | both | default
   energy_log_path:  energy_baseline_pyvrp.json
+
+  # Per-instance HGS time budget (seconds).
+  # `max_runtime_s` -- single fixed budget for every file. Takes priority
+  #                   when non-null and disables the size-based lookup.
+  # `size_to_time_s` -- per-problem-size lookup (key = number of customers,
+  #                     value = seconds). Falls back to max(values) for
+  #                     unmapped sizes. Used when max_runtime_s is null.
+  max_runtime_s:   60
+  size_to_time_s:
+    20:  10
+    50:  60
+    100: 200

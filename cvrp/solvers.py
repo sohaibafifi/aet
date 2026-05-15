@@ -27,12 +27,10 @@ from aet.energy import EnergyTracker
 
 log = utils.get_pylogger(__name__)
 
-# Size to solving time as in paper (seconds)
-size_to_time = {
-    20: 5,
-    50: 10,
-    100: 20,
-}
+# Fallback per-size HGS time budget (seconds). Overridden by
+# solver_cfg.size_to_time_s in config.yaml; only used when that field is
+# absent.
+DEFAULT_SIZE_TO_TIME = {20: 10, 50: 60, 100: 200}
 
 
 @hydra.main(version_base="1.3", config_path="../configs", config_name="config.yaml")
@@ -109,11 +107,18 @@ def solve(cfg: DictConfig) -> Optional[float]:
         ),
     )
 
+    fixed_runtime = solver_cfg.get("max_runtime_s")  # None | float
+    size_to_time = dict(solver_cfg.get("size_to_time_s") or DEFAULT_SIZE_TO_TIME)
+    size_to_time = {int(k): float(v) for k, v in size_to_time.items()}
+
     for file in (pbar := tqdm(data_files, desc="Solving with " + solver)):
         td_test = load_npz_to_tensordict(file)
         demand_key = "demand" if "demand" in td_test.keys() else "demand_linehaul"
         num_problems, size = td_test[demand_key].shape
-        max_runtime = size_to_time.get(size - 1, max(size_to_time.values()))
+        if fixed_runtime is not None:
+            max_runtime = float(fixed_runtime)
+        else:
+            max_runtime = size_to_time.get(size - 1, max(size_to_time.values()))
 
         for mode_name, num_procs in thread_modes:
             sol_suffix = f"_{solver}_{mode_name}" if len(thread_modes) > 1 else f"_{solver}"
