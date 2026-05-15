@@ -178,7 +178,28 @@ def run(cfg: DictConfig) -> Tuple[dict, dict]:
 
     for variant, test_file in zip(names, test_files):
         log.info(f"Testing on {variant} dataset loaded from {test_file}")
-        td_data = env.load_data(os.path.join(data_dir, test_file)).to(device)
+        # NOTE: CVRPEnv.load_data normalizes demand via
+        #     td["demand"] / td["capacity"][:, None]
+        # which assumes external Uchoa-style files where capacity has
+        # shape (N,). Our generator (rl4co's CVRPGenerator) stores
+        # capacity with shape (N, 1); the extra unsqueeze then broadcasts
+        # to (N, num_loc, num_loc) and corrupts the demand tensor. We
+        # bypass the override and normalize manually.
+        from rl4co.data.utils import load_npz_to_tensordict
+        td_data = load_npz_to_tensordict(
+            os.path.join(data_dir, test_file)
+        ).to(device)
+        # Normalize demand by capacity, handling both (N,) and (N, 1)
+        # capacity layouts.
+        if "capacity" in td_data.keys() and "demand" in td_data.keys():
+            cap = td_data["capacity"]
+            if cap.ndim == td_data["demand"].ndim:
+                # capacity already broadcast-aligned, e.g. (N, 1)
+                td_data.set("demand", td_data["demand"] / cap)
+            else:
+                td_data.set(
+                    "demand", td_data["demand"] / cap.unsqueeze(-1)
+                )
         # Defensive: persisted tensordicts can come back with a multi-dim
         # batch (e.g. (1, N) instead of (N,)) depending on how they were
         # generated. The dataloader and env._reset both assume a single
