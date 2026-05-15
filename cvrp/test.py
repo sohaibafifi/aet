@@ -147,7 +147,24 @@ def run(cfg: DictConfig) -> Tuple[dict, dict]:
                     local_rewards = torch.cat([local_rewards, reward], dim=0)
         return local_rewards
 
-    for variant, test_file in zip(cfg.env.test_dataloader_names, cfg.env.test_file):
+    # Normalize test_file / test_dataloader_names into parallel lists so
+    # the loop below works with both scalar and list configurations.
+    raw_files = cfg.env.test_file
+    if isinstance(raw_files, str) or raw_files is None:
+        test_files = [raw_files] if raw_files else []
+    else:
+        test_files = list(raw_files)
+    raw_names = cfg.env.get("test_dataloader_names", None)
+    if raw_names is None:
+        names = [cfg.env.get("name", "test") for _ in test_files]
+    elif isinstance(raw_names, str):
+        names = [raw_names]
+    else:
+        names = list(raw_names)
+    if len(names) != len(test_files):
+        names = [cfg.env.get("name", "test") for _ in test_files]
+
+    for variant, test_file in zip(names, test_files):
         log.info(f"Testing on {variant} dataset loaded from {test_file}")
         td_data = env.load_data(os.path.join(data_dir, test_file)).to(device)
         n_instances = td_data.batch_size[0] if td_data.batch_size else len(td_data)

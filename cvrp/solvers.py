@@ -71,9 +71,16 @@ def solve(cfg: DictConfig) -> Optional[float]:
 
     # Restrict to test/val files declared by the active env config.
     # Falls back to walking data/ only when the env has no file list.
-    env_test_files  = list(cfg.env.get("test_file", []) or [])
-    env_val_files   = list(cfg.env.get("val_file",  []) or [])
-    declared_files  = env_test_files + env_val_files
+    def _as_list(x):
+        if x is None:
+            return []
+        if isinstance(x, str):
+            return [x]
+        return list(x)
+
+    env_test_files = _as_list(cfg.env.get("test_file"))
+    env_val_files  = _as_list(cfg.env.get("val_file"))
+    declared_files = env_test_files + env_val_files
 
     if declared_files:
         # env files are listed relative to data/ (e.g. "all/test_20.npz",

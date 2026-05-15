@@ -47,10 +47,11 @@ env:
   check_solution: False
   generator_params:
     num_loc: 50
-  val_file:              ["cvrp/val_${env.generator_params.num_loc}.npz"]
-  val_dataloader_names:  ["cvrp"]
-  test_file:             ["cvrp/test_${env.generator_params.num_loc}.npz"]
-  test_dataloader_names: ["cvrp"]
+  # Single-file paths (scalar, not list) -- avoids rl4co's
+  # multi-dataloader dict-of-datasets path which breaks shape
+  # assumptions for single-class experiments.
+  val_file:  "cvrp/val_${env.generator_params.num_loc}.npz"
+  test_file: "cvrp/test_${env.generator_params.num_loc}.npz"
 
 # ----------------------------------------------------------------------
 # Model: attention-based autoregressive solver (Kool et al. 2019).
