@@ -44,10 +44,11 @@ except Exception as e:  # pragma: no cover
 #   E_train = 42120 Wh on a datacenter GPU
 #   E_NN per inst at batch 1024 = 4.07e-6 Wh
 #   E_meta per inst mono = 0.125 Wh
-SMOKE_BATCHES = [1, 32, 128, 512, 1024]
+SMOKE_BATCHES  = [1, 32, 128, 512, 1024]
 SMOKE_HARDWARE = ["laptop-cpu", "server-cpu", "consumer-gpu", "datacenter-gpu"]
-SMOKE_DELTAS = [0.0, 1.0, 2.0, 5.0, 10.0]
-SMOKE_SEEDS = list(range(5))
+SMOKE_DELTAS   = [0.0, 1.0, 2.0, 5.0, 10.0]
+SMOKE_SEEDS    = list(range(5))
+SMOKE_BUDGETS  = [1.0, 5.0, 10.0, 30.0, 60.0, 120.0]   # HGS per-instance budgets (s)
 
 # Per-hardware power draws (W) and embodied-carbon shorthand.
 HARDWARE_POWER_W = {
@@ -85,15 +86,25 @@ def smoke_e_nn_per_inst_wh(batch: int, hardware: str) -> float:
     return p_w / (3600.0 * tau)
 
 
-def smoke_e_meta_per_inst_wh(threads_mode: str, hardware: str) -> float:
-    """Per-instance metaheuristic energy. Threads scale time but not power."""
+def smoke_e_meta_per_inst_wh(
+    threads_mode: str,
+    hardware: str,
+    budget_s: float = 10.0,
+) -> float:
+    """Per-instance metaheuristic energy at the given HGS budget.
+
+    Wall time per instance ~= budget. Mono uses one core; multi uses
+    multiple cores with sub-linear scaling. Per-instance energy is
+    roughly the same in both modes (each instance runs on one logical
+    worker); idle-power contamination makes mono ~10-20% higher.
+    """
     p_w = HARDWARE_POWER_W[hardware]
-    t_meta_s = 10.0  # PyVRP wall time per instance on a single thread
     if threads_mode == "mono":
-        return p_w * t_meta_s / 3600.0
+        # 1 active core for budget seconds + idle overhead.
+        return p_w * budget_s / 3600.0 * 1.15
     elif threads_mode == "multi":
-        # ~8 threads with sub-linear scaling; speedup ~5x
-        return p_w * (t_meta_s / 5.0) / 3600.0
+        # Same energy per instance, slightly lower with better idle amortization.
+        return p_w * budget_s / 3600.0
     else:
         raise ValueError(f"unknown threads_mode: {threads_mode}")
 
@@ -112,7 +123,10 @@ def smoke_gap_pct(seed: int) -> float:
 
 
 def generate_smoke_rows() -> list[dict]:
-    """Cartesian product of (batch, hardware, delta, seed) with derived energies."""
+    """Cartesian product of (batch, hardware, delta, seed, budget) with
+    derived energies. The budget axis is the HGS per-instance time budget
+    (seconds); per-instance metaheuristic energy scales linearly in it.
+    """
     rows: list[dict] = []
     for hw in SMOKE_HARDWARE:
         if not HARDWARE_IS_TRAINABLE[hw]:
@@ -127,19 +141,23 @@ def generate_smoke_rows() -> list[dict]:
                     gap_nn = smoke_gap_pct(seed + 11 * batch)
                     gap_base = 0.0  # pyvrp ~ optimal
                     feasible = gap_nn <= gap_base + delta
-                    rows.append({
-                        "hardware":   hw,
-                        "batch":      batch,
-                        "delta_pct":  delta,
-                        "seed":       seed,
-                        "E_train_wh": e_train,
-                        "E_NN_wh_per_inst":   e_nn,
-                        "E_meta_wh_per_inst_mono":  smoke_e_meta_per_inst_wh("mono",  "server-cpu"),
-                        "E_meta_wh_per_inst_multi": smoke_e_meta_per_inst_wh("multi", "server-cpu"),
-                        "gap_nn_pct":   gap_nn,
-                        "gap_base_pct": gap_base,
-                        "feasible":     feasible,
-                    })
+                    for budget in SMOKE_BUDGETS:
+                        e_mono  = smoke_e_meta_per_inst_wh("mono",  "server-cpu", budget)
+                        e_multi = smoke_e_meta_per_inst_wh("multi", "server-cpu", budget)
+                        rows.append({
+                            "hardware":   hw,
+                            "batch":      batch,
+                            "delta_pct":  delta,
+                            "seed":       seed,
+                            "budget_s":   budget,
+                            "E_train_wh": e_train,
+                            "E_NN_wh_per_inst":         e_nn,
+                            "E_meta_wh_per_inst_mono":  e_mono,
+                            "E_meta_wh_per_inst_multi": e_multi,
+                            "gap_nn_pct":   gap_nn,
+                            "gap_base_pct": gap_base,
+                            "feasible":     feasible,
+                        })
     return rows
 
 
@@ -445,6 +463,292 @@ def plot_by_budget(rows: list[dict], out_path: str) -> dict:
 
 
 # ----------------------------------------------------------------------
+# Combined 2x2 sweep figure (batch / hardware / delta / budget overlay)
+# ----------------------------------------------------------------------
+
+def _curves_by_batch(rows):
+    hw = _pick_default_hardware(rows)
+    held = [r for r in rows if r["hardware"] == hw and r["delta_pct"] == 1.0]
+    by = _group_by(held, "batch")
+    keys = sorted(by.keys())
+    colors = _viridis_colors(len(keys))
+    curves = []
+    for k, col in zip(keys, colors):
+        sub = by[k]
+        e_nn = float(np.median([r["E_NN_wh_per_inst"] for r in sub]))
+        curves.append(CurveSpec(
+            label=f"B = {k:>4d}",
+            color=col,
+            e_train_samples=np.array([r["E_train_wh"] for r in sub]),
+            e_nn_per_inst=e_nn,
+            feasible_share=float(np.mean([r["feasible"] for r in sub])),
+        ))
+    return curves, held, f"batch size  (hardware = {hw}, $\\delta$=1%)"
+
+
+def _curves_by_hardware(rows):
+    plateau_batch = max({r["batch"] for r in rows}) if rows else max(SMOKE_BATCHES)
+    held = [r for r in rows if r["batch"] == plateau_batch and r["delta_pct"] == 1.0]
+    by = _group_by(held, "hardware")
+    seen = set(by.keys())
+    order = [h for h in SMOKE_HARDWARE if h in seen] + sorted(seen - set(SMOKE_HARDWARE))
+    colors = _viridis_colors(len(order))
+    curves = []
+    for k, col in zip(order, colors):
+        sub = by[k]
+        e_nn = float(np.median([r["E_NN_wh_per_inst"] for r in sub]))
+        curves.append(CurveSpec(
+            label=f"{k}",
+            color=col,
+            e_train_samples=np.array([r["E_train_wh"] for r in sub]),
+            e_nn_per_inst=e_nn,
+            feasible_share=float(np.mean([r["feasible"] for r in sub])),
+        ))
+    return curves, held, f"hardware  (B={plateau_batch}, $\\delta$=1%)"
+
+
+def _curves_by_delta(rows):
+    hw = _pick_default_hardware(rows)
+    plateau_batch = max({r["batch"] for r in rows}) if rows else max(SMOKE_BATCHES)
+    held = [r for r in rows if r["hardware"] == hw and r["batch"] == plateau_batch]
+    by = _group_by(held, "delta_pct")
+    keys = sorted(by.keys())
+    colors = _viridis_colors(len(keys))
+    curves = []
+    for k, col in zip(keys, colors):
+        sub = by[k]
+        e_nn = float(np.median([r["E_NN_wh_per_inst"] for r in sub]))
+        feas = float(np.mean([r["feasible"] for r in sub]))
+        marker = "" if feas >= 0.5 else " [infeas.]"
+        curves.append(CurveSpec(
+            label=f"$\\delta$ = {k:g}%{marker}",
+            color=col,
+            e_train_samples=np.array([r["E_train_wh"] for r in sub]),
+            e_nn_per_inst=e_nn,
+            feasible_share=feas,
+        ))
+    return curves, held, f"quality tolerance  (hardware = {hw}, B={plateau_batch})"
+
+
+def plot_combined(rows: list[dict], out_path: str) -> dict:
+    """2x2 subplot grid: batch / hardware / delta / budget axes.
+
+    Each subplot mirrors a ``plot_by_*`` function but shares one figure
+    for at-a-glance comparison. Useful as the main paper sensitivity
+    figure when a single composite is desired.
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(16, 11))
+    summary: dict[str, dict] = {}
+
+    def _meta_lines(held):
+        if not held:
+            return float("nan"), float("nan")
+        return (
+            float(np.median([r["E_meta_wh_per_inst_mono"]  for r in held])),
+            float(np.median([r["E_meta_wh_per_inst_multi"] for r in held])),
+        )
+
+    curves, held, t = _curves_by_batch(rows)
+    e_mo, e_mu = _meta_lines(held)
+    summary["batch"] = _plot_family(axes[0, 0], curves, e_mo, e_mu,
+                                    title=f"AET sensitivity: {t}")
+
+    curves, held, t = _curves_by_hardware(rows)
+    e_mo, e_mu = _meta_lines(held)
+    summary["hardware"] = _plot_family(axes[0, 1], curves, e_mo, e_mu,
+                                       title=f"AET sensitivity: {t}")
+
+    curves, held, t = _curves_by_delta(rows)
+    e_mo, e_mu = _meta_lines(held)
+    summary["delta"] = _plot_family(axes[1, 0], curves, e_mo, e_mu,
+                                    title=f"AET sensitivity: {t}")
+
+    # (1, 1) HGS-budget panel: one NN line + one meta line per budget.
+    ax = axes[1, 1]
+    hw = _pick_default_hardware(rows)
+    plateau_batch = max({r["batch"] for r in rows}) if rows else max(SMOKE_BATCHES)
+    budgets = sorted({
+        r["budget_s"] for r in rows
+        if isinstance(r.get("budget_s"), float) and r["budget_s"] == r["budget_s"]
+    })
+    if len(budgets) >= 2:
+        held = [r for r in rows
+                if r["hardware"] == hw and r["batch"] == plateau_batch
+                and r["delta_pct"] == 1.0]
+        if not held:
+            held = [r for r in rows if r["hardware"] == hw and r["batch"] == plateau_batch]
+        e_train_samples = np.array([r["E_train_wh"] for r in held])
+        e_train_med = float(np.median(e_train_samples)) if held else 0.0
+        e_nn = float(np.median([r["E_NN_wh_per_inst"] for r in held])) if held else 0.0
+        N = _n_grid()
+        ax.plot(N, e_train_med + e_nn * N, color="#1f77b4", linewidth=2.0,
+                label=f"NN (B={plateau_batch})")
+        colors = _viridis_colors(len(budgets))
+        budget_annot: dict[str, float] = {}
+        for budget, col in zip(budgets, colors):
+            sub = [r for r in rows
+                   if r["budget_s"] == budget and r["hardware"] == hw
+                   and r["batch"] == plateau_batch]
+            if not sub:
+                continue
+            e_meta = float(np.median([r["E_meta_wh_per_inst_multi"] for r in sub]))
+            ax.plot(N, e_meta * N, linestyle="--", linewidth=1.4, color=col,
+                    label=f"HGS multi, t={budget:g}s")
+            denom = e_meta - e_nn
+            if denom > 0:
+                n_star = e_train_med / denom
+                if 1.0 <= n_star <= 1e10:
+                    ax.plot([n_star], [e_meta * n_star], marker="o", color=col,
+                            markersize=7, markeredgecolor="black",
+                            markeredgewidth=0.6, zorder=5)
+                    budget_annot[f"t={budget:g}s"] = float(n_star)
+        summary["budget"] = budget_annot
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("N (deployed instances)")
+        ax.set_ylabel("Cumulative energy (Wh)")
+        ax.set_title(
+            f"AET sensitivity: HGS time budget  "
+            f"(hardware = {hw}, B={plateau_batch}, multi-thread)"
+        )
+        ax.grid(True, which="both", alpha=0.3)
+        ax.legend(fontsize=7, loc="upper left", framealpha=0.9)
+    else:
+        ax.text(0.5, 0.5,
+                "Budget sweep requires runtime_sweep_s\nwith at least 2 values.",
+                ha="center", va="center", transform=ax.transAxes)
+        ax.axis("off")
+        summary["budget"] = {}
+
+    fig.suptitle("AET sensitivity surface (all axes)", fontsize=14, y=1.00)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return {"figure": out_path, "crossovers": summary}
+
+
+# ----------------------------------------------------------------------
+# Envelope (fill_between) sweep figure
+# ----------------------------------------------------------------------
+
+def plot_envelope(rows: list[dict], out_path: str) -> dict:
+    """Single-plot envelope of cumulative energies across all sweep axes.
+
+    For each N on the deployment grid, compute the min / median / max
+    of cumulative neural energy across all (batch, hardware, delta,
+    seed) combinations, and the min / median / max of cumulative
+    metaheuristic energy across (thread_mode, budget) combinations.
+    Shaded bands show full spread; solid lines show medians. The
+    region where the NN envelope sits below the HGS envelope marks
+    the deployment regime where the network wins for every
+    practitioner choice; the crossover band marks the AET interval.
+    """
+    if not rows:
+        fig, ax = plt.subplots(figsize=(9, 6))
+        ax.text(0.5, 0.5, "No data.", ha="center", va="center",
+                transform=ax.transAxes)
+        ax.axis("off")
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return {"figure": out_path, "crossovers": {}}
+
+    N = _n_grid()
+
+    # NN cumulative: stack per-row curves
+    nn_cum_rows = []
+    for r in rows:
+        if r["feasible"] is False:
+            continue
+        nn_cum_rows.append(r["E_train_wh"] + r["E_NN_wh_per_inst"] * N)
+    if not nn_cum_rows:
+        nn_cum_rows = [r["E_train_wh"] + r["E_NN_wh_per_inst"] * N for r in rows]
+    nn_cum = np.vstack(nn_cum_rows)
+
+    nn_min = nn_cum.min(axis=0)
+    nn_max = nn_cum.max(axis=0)
+    nn_med = np.median(nn_cum, axis=0)
+
+    # HGS cumulative: take min/max over BOTH thread modes and budgets
+    meta_vals = []
+    for r in rows:
+        meta_vals.append(r["E_meta_wh_per_inst_mono"])
+        meta_vals.append(r["E_meta_wh_per_inst_multi"])
+    meta_arr = np.array([v for v in meta_vals if np.isfinite(v) and v > 0])
+    if meta_arr.size == 0:
+        meta_arr = np.array([1e-3])
+    e_meta_min = float(meta_arr.min())
+    e_meta_max = float(meta_arr.max())
+    e_meta_med = float(np.median(meta_arr))
+
+    meta_cum_min = e_meta_min * N
+    meta_cum_max = e_meta_max * N
+    meta_cum_med = e_meta_med * N
+
+    fig, ax = plt.subplots(figsize=(10, 6.5))
+
+    # NN envelope (blue)
+    ax.fill_between(N, nn_min, nn_max, color="#1f77b4", alpha=0.20,
+                    label="NN envelope (across batch / hardware / $\\delta$ / seed)")
+    ax.plot(N, nn_med, color="#1f77b4", linewidth=2.2,
+            label=f"NN median (E_NN $\\approx$ {np.median([r['E_NN_wh_per_inst'] for r in rows]):.2e} Wh/inst)")
+
+    # HGS envelope (red)
+    ax.fill_between(N, meta_cum_min, meta_cum_max, color="#d62728", alpha=0.20,
+                    label="HGS envelope (across thread mode / budget)")
+    ax.plot(N, meta_cum_med, color="#d62728", linewidth=2.2, linestyle="--",
+            label=f"HGS median (E_meta $\\approx$ {e_meta_med:.2e} Wh/inst)")
+
+    # Mark median crossover
+    e_nn_med = float(np.median([r["E_NN_wh_per_inst"] for r in rows]))
+    e_train_med = float(np.median([r["E_train_wh"] for r in rows]))
+    denom = e_meta_med - e_nn_med
+    crossover = float("nan")
+    if denom > 0:
+        crossover = e_train_med / denom
+        if 1.0 <= crossover <= 1e10:
+            ax.axvline(crossover, linestyle=":", color="black", alpha=0.5)
+            ax.annotate(
+                f"AET median $\\approx$ {crossover:,.0f}",
+                xy=(crossover, e_meta_med * crossover),
+                xytext=(crossover * 2.0, e_meta_med * crossover * 0.3),
+                arrowprops=dict(arrowstyle="->", color="black", alpha=0.5),
+                fontsize=10,
+            )
+
+    # Crossover band: range of AET across env (min/max E_meta)
+    aet_min = aet_max = float("nan")
+    denom_max = e_meta_max - e_nn_med
+    denom_min = e_meta_min - e_nn_med
+    if denom_max > 0 and denom_min > 0:
+        aet_min = e_train_med / denom_max
+        aet_max = e_train_med / denom_min
+        if all(1.0 <= v <= 1e10 for v in [aet_min, aet_max]):
+            ax.axvspan(aet_min, aet_max, color="gray", alpha=0.15,
+                       label=f"AET band [{aet_min:,.0f}, {aet_max:,.0f}]")
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("N (deployed instances)")
+    ax.set_ylabel("Cumulative energy (Wh)")
+    ax.set_title("AET envelope: NN vs HGS across the full sensitivity surface")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend(fontsize=8, loc="upper left", framealpha=0.92)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return {
+        "figure": out_path,
+        "crossover_median": crossover,
+        "aet_band_min": aet_min,
+        "aet_band_max": aet_max,
+        "e_nn_median": e_nn_med,
+        "e_meta_min":  e_meta_min,
+        "e_meta_med":  e_meta_med,
+        "e_meta_max":  e_meta_max,
+    }
+
+
+# ----------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------
 
@@ -548,6 +852,10 @@ def main() -> int:
                                                    os.path.join(args.output_dir, "aet_by_delta.png"))
     summary["figures"]["budget"]   = plot_by_budget(rows,
                                                     os.path.join(args.output_dir, "aet_by_budget.png"))
+    summary["figures"]["combined"] = plot_combined(rows,
+                                                   os.path.join(args.output_dir, "aet_sensitivity_overview.png"))
+    summary["figures"]["envelope"] = plot_envelope(rows,
+                                                   os.path.join(args.output_dir, "aet_envelope.png"))
 
     summary_path = os.path.join(args.output_dir, "aet_sweep_summary.json")
     with open(summary_path, "w") as f:
