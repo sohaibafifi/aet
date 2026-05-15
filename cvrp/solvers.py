@@ -41,7 +41,7 @@ log = utils.get_pylogger(__name__)
 #     stores demand as (demand_int / capacity); we recover the integer
 #     via round(demand_norm * capacity).
 # ----------------------------------------------------------------------
-PYVRP_COORD_SCALE = 1_000_000  # 1e6
+PYVRP_COORD_SCALE = 100_000  # 1e5
 
 
 def _pyvrp_solve_one(args):
