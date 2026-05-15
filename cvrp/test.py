@@ -179,7 +179,17 @@ def run(cfg: DictConfig) -> Tuple[dict, dict]:
     for variant, test_file in zip(names, test_files):
         log.info(f"Testing on {variant} dataset loaded from {test_file}")
         td_data = env.load_data(os.path.join(data_dir, test_file)).to(device)
+        # Defensive: persisted tensordicts can come back with a multi-dim
+        # batch (e.g. (1, N) instead of (N,)) depending on how they were
+        # generated. The dataloader and env._reset both assume a single
+        # instance dim, so flatten anything else.
+        if len(td_data.batch_size) != 1:
+            log.info(
+                f"Flattening td_data batch_size {tuple(td_data.batch_size)} -> 1D"
+            )
+            td_data = td_data.reshape(-1)
         n_instances = td_data.batch_size[0] if td_data.batch_size else len(td_data)
+        log.info(f"Loaded {n_instances} test instances, td shape {tuple(td_data.batch_size)}")
 
         batch_sizes_to_run = batch_sweep if batch_sweep else [cfg.model.test_batch_size]
         all_max_aug_reward = None
