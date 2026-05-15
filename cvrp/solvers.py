@@ -91,14 +91,22 @@ def _pyvrp_solve_one(args):
 
     result = pyvrp_solve(data, stop=MaxRuntime(float(max_runtime)))
     sol = result.best
+    feasible = bool(result.is_feasible())
     # Giant-tour action: concat routes separated by 0 (depot).
     action: list[int] = []
     for route in sol.routes():
         action.extend(route.visits())
         action.append(0)
-    # Unscale cost back to original coordinate units.
-    cost = float(result.cost()) / PYVRP_COORD_SCALE
-    return action, cost
+    # Unscale cost back to original coordinate units. If PyVRP could not
+    # find a feasible solution within the time budget, report cost=+inf
+    # so the downstream aggregator can filter (mean/median over inf is
+    # an inf, which surfaces the failure instead of silently corrupting
+    # the average with PyVRP's MAX_VALUE sentinel).
+    if feasible:
+        cost = float(result.cost()) / PYVRP_COORD_SCALE
+    else:
+        cost = float("inf")
+    return action, cost, feasible
 
 
 def _pyvrp_solve_batch(td_test, max_runtime: float, num_procs: int):
@@ -143,11 +151,18 @@ def _pyvrp_solve_batch(td_test, max_runtime: float, num_procs: int):
     # Pad actions to a fixed length tensor.
     actions = [r[0] for r in results]
     costs = torch.tensor([r[1] for r in results], dtype=torch.float32)
+    feasibles = torch.tensor([r[2] for r in results], dtype=torch.bool)
+    n_infeasible = int((~feasibles).sum().item())
+    if n_infeasible:
+        log.warning(
+            f"PyVRP did not find a feasible solution within t={max_runtime}s "
+            f"for {n_infeasible}/{n_instances} instances; costs reported as inf."
+        )
     t_max = max(len(a) for a in actions) if actions else 0
     actions_pad = torch.zeros((n_instances, t_max), dtype=torch.long)
     for i, a in enumerate(actions):
         actions_pad[i, : len(a)] = torch.tensor(a, dtype=torch.long)
-    return actions_pad, costs
+    return actions_pad, costs, feasibles
 
 # Fallback per-size HGS time budget (seconds). Overridden by
 # solver_cfg.size_to_time_s in config.yaml; only used when that field is
@@ -319,8 +334,10 @@ def solve(cfg: DictConfig) -> Optional[float]:
                 start = time.time()
                 with tracker:
                     if solver == "pyvrp":
-                        actions_solver, costs_solver = _pyvrp_solve_batch(
-                            td_test, max_runtime=budget, num_procs=num_procs
+                        actions_solver, costs_solver, feasibles_solver = (
+                            _pyvrp_solve_batch(
+                                td_test, max_runtime=budget, num_procs=num_procs
+                            )
                         )
                         # cost is tour length; reward convention in this
                         # repo is negative cost (consistent with rl4co).
@@ -334,6 +351,17 @@ def solve(cfg: DictConfig) -> Optional[float]:
                     tracker.n_items = int(num_problems)
                 total_time = time.time() - start
 
+                # Feasibility accounting. avg_cost is computed only over
+                # feasible instances; the infeasible count is logged so
+                # the AET aggregator can flag a budget that is too tight.
+                n_feasible = int(feasibles_solver.sum().item())
+                n_infeasible = int(num_problems) - n_feasible
+                if n_feasible > 0:
+                    feas_costs = costs_solver[feasibles_solver]
+                    avg_cost = float(feas_costs.mean().item())
+                else:
+                    avg_cost = float("inf")
+
                 reading = tracker.reading.to_dict()
                 reading.update(
                     {
@@ -345,7 +373,9 @@ def solve(cfg: DictConfig) -> Optional[float]:
                         "size": int(size),
                         "max_runtime_s": float(budget),
                         "wall_total_s": float(total_time),
-                        "avg_cost": float(-rewards_solver.mean()),
+                        "avg_cost": avg_cost,
+                        "n_feasible": n_feasible,
+                        "n_infeasible": n_infeasible,
                     }
                 )
                 energy_records.append(reading)
@@ -354,18 +384,20 @@ def solve(cfg: DictConfig) -> Optional[float]:
                     f"Time: {total_time:.3f} s | "
                     f"E={reading.get('energy_wh')} Wh | "
                     f"CO2={reading.get('co2_g_total')} g | "
-                    f"budget={budget:g}s"
+                    f"budget={budget:g}s | "
+                    f"feasible={n_feasible}/{int(num_problems)}"
                 )
-                print(f"Average cost: {-rewards_solver.mean():.3f}")
+                print(f"Average cost (feasible only): {avg_cost:.3f}")
 
                 out = TensorDict(
                     {
-                        "actions":     actions_solver,
-                        "costs":       costs_solver,
-                        "time":        total_time,
-                        "energy_wh":   float(reading.get("energy_wh") or 0.0),
-                        "co2_g":       float(reading.get("co2_g_total") or 0.0),
-                        "num_procs":   int(num_procs),
+                        "actions":      actions_solver,
+                        "costs":        costs_solver,
+                        "feasible":     feasibles_solver,
+                        "time":         total_time,
+                        "energy_wh":    float(reading.get("energy_wh") or 0.0),
+                        "co2_g":        float(reading.get("co2_g_total") or 0.0),
+                        "num_procs":    int(num_procs),
                         "max_runtime_s": float(budget),
                     },
                     batch_size=[],
