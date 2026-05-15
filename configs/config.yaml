@@ -1,0 +1,158 @@
+# Single-file Hydra config for the AET measurement protocol on CVRP at n=50.
+# All settings inlined; no overlays. Override at the CLI via Hydra dotted paths:
+#   python -m cvrp.train     seed=42 trainer.max_epochs=50
+#   python -m cvrp.test
+#   python -m cvrp.solvers   solver_cfg.threads_mode=multi
+
+defaults:
+  - _self_
+
+# ----------------------------------------------------------------------
+# Run control
+# ----------------------------------------------------------------------
+mode:    "train"
+tags:    ["aet", "cvrp50"]
+train:   True
+test:    True
+compile: False
+ckpt_path: null
+auto_resume: false
+seed: null
+matmul_precision: "medium"
+
+# ----------------------------------------------------------------------
+# Paths (consumed by paths.* references below).
+# ----------------------------------------------------------------------
+paths:
+  root_dir:   "."
+  data_dir:   ${paths.root_dir}/data
+  log_dir:    ${paths.root_dir}/logs
+  output_dir: ${hydra:runtime.output_dir}
+  work_dir:   ${hydra:runtime.cwd}
+
+# ----------------------------------------------------------------------
+# Hydra utilities (pretty config print + tag enforcement).
+# ----------------------------------------------------------------------
+extras:
+  ignore_warnings: False
+  enforce_tags:    False
+  print_config:    True
+
+# ----------------------------------------------------------------------
+# Environment: CVRP (rl4co).
+# ----------------------------------------------------------------------
+env:
+  _target_: rl4co.envs.routing.cvrp.env.CVRPEnv
+  name:     cvrp
+  check_solution: False
+  generator_params:
+    num_loc: 50
+  val_file:              ["cvrp/val_${env.generator_params.num_loc}.npz"]
+  val_dataloader_names:  ["cvrp"]
+  test_file:             ["cvrp/test_${env.generator_params.num_loc}.npz"]
+  test_dataloader_names: ["cvrp"]
+
+# ----------------------------------------------------------------------
+# Model: attention-based autoregressive solver (Kool et al. 2019).
+# ----------------------------------------------------------------------
+model:
+  _target_: rl4co.models.AttentionModel
+
+  policy:
+    _target_: rl4co.models.zoo.am.policy.AttentionModelPolicy
+    embed_dim: 128
+    num_encoder_layers: 3
+    num_heads: 8
+    init_embedding:
+      _target_: rl4co.models.nn.env_embeddings.init.VRPInitEmbedding
+      embed_dim: ${model.policy.embed_dim}
+    context_embedding:
+      _target_: rl4co.models.nn.env_embeddings.context.VRPContext
+      embed_dim: ${model.policy.embed_dim}
+    dynamic_embedding:
+      _target_: rl4co.models.nn.env_embeddings.dynamic.StaticEmbedding
+
+  batch_size:       512
+  val_batch_size:   ${model.batch_size}
+  test_batch_size:  ${model.batch_size}
+  train_data_size:  20_000
+  val_data_size:    1_000
+  test_data_size:   1_000
+
+  optimizer_kwargs:
+    lr: 1e-4
+    weight_decay: 1e-6
+
+  lr_scheduler: MultiStepLR
+  lr_scheduler_kwargs:
+    milestones: [90, 95]
+    gamma: 0.1
+
+  metrics:
+    train: ["loss", "reward"]
+    val:   ["reward", "max_reward"]
+    test:  ${.val}
+    log_on_step: True
+
+# ----------------------------------------------------------------------
+# Lightning trainer (RL4COTrainer).
+# ----------------------------------------------------------------------
+trainer:
+  _target_: rl4co.utils.trainer.RL4COTrainer
+  default_root_dir:        ${paths.output_dir}
+  max_epochs:              100
+  gradient_clip_val:       1.0
+  accelerator:             "auto"
+  strategy:                "auto"
+  precision:               "32"
+  check_val_every_n_epoch: 1
+  deterministic:           False
+
+# ----------------------------------------------------------------------
+# Callbacks: checkpoint best model, log learning rate, show progress.
+# ----------------------------------------------------------------------
+callbacks:
+  model_checkpoint:
+    _target_:  lightning.pytorch.callbacks.ModelCheckpoint
+    dirpath:   ${paths.output_dir}/checkpoints
+    filename:  "epoch_{epoch:03d}"
+    monitor:   "val/reward"
+    mode:      "max"
+    save_last: True
+    save_top_k: 1
+    auto_insert_metric_name: False
+  learning_rate_monitor:
+    _target_: lightning.pytorch.callbacks.LearningRateMonitor
+    logging_interval: "epoch"
+  rich_progress_bar:
+    _target_: lightning.pytorch.callbacks.RichProgressBar
+
+# ----------------------------------------------------------------------
+# Logger: csv (lightweight, no extra deps).
+# ----------------------------------------------------------------------
+logger:
+  csv:
+    _target_: lightning.pytorch.loggers.CSVLogger
+    save_dir: ${paths.output_dir}
+    name:     "csv"
+
+# ----------------------------------------------------------------------
+# Energy instrumentation (read by aet.energy.EnergyTracker).
+# ----------------------------------------------------------------------
+energy:
+  backend:                  codecarbon
+  pue:                      1.4
+  hardware_id:              null
+  country_iso_code:         null
+  grid_intensity_g_per_kwh: 475.0
+  report_embodied:          true
+  lifetime_s:               null
+  batch_sweep:              [1, 32, 128, 512, 1024]
+
+# ----------------------------------------------------------------------
+# HGS / PyVRP baseline (read by cvrp.solvers).
+# ----------------------------------------------------------------------
+solver_cfg:
+  name:             pyvrp
+  threads_mode:     both           # mono | multi | both | default
+  energy_log_path:  energy_baseline_pyvrp.json

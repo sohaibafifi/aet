@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+.eggs/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Logs & outputs
+logs/
+output_*.txt
+*.log
+*.oar
+energy_baseline_*.json
+
+# Solution + cached data
+data/*/test_*_sol_*.npz
+data/*/val_*_sol_*.npz
+
+# LaTeX
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.log
+paper/*.out
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.synctex.gz
+paper/paper.pdf
+
+paper
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
+
+# Codecarbon
+.codecarbon.lock
+emissions.csv
+emissions_base*.csv
+
+# Hydra
+.hydra/
+multirun/
+
+# data
+data
