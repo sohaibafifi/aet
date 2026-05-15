@@ -60,17 +60,10 @@ model:
 
   policy:
     _target_: rl4co.models.zoo.am.policy.AttentionModelPolicy
+    env_name: cvrp                # rl4co resolves CVRP-specific embeddings
     embed_dim: 128
     num_encoder_layers: 3
     num_heads: 8
-    init_embedding:
-      _target_: rl4co.models.nn.env_embeddings.init.VRPInitEmbedding
-      embed_dim: ${model.policy.embed_dim}
-    context_embedding:
-      _target_: rl4co.models.nn.env_embeddings.context.VRPContext
-      embed_dim: ${model.policy.embed_dim}
-    dynamic_embedding:
-      _target_: rl4co.models.nn.env_embeddings.dynamic.StaticEmbedding
 
   batch_size:       512
   val_batch_size:   ${model.batch_size}
