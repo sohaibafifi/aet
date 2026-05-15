@@ -1,0 +1,9 @@
+{
+  "crossover_N": 182163.03470540757,
+  "asymptotic_ratio": 0.4290322580645161,
+  "e_train_wh": 225.7,
+  "e_nn_wh_per_inst": 0.000931,
+  "e_meta_wh_per_inst": 0.00217,
+  "output_path": "paper/arxiv/figures/asymptotic_curves.png",
+  "ratio_path": "paper/arxiv/figures/asymptotic_ratio.png"
+}

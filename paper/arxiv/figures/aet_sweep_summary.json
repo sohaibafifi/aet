@@ -1,0 +1,83 @@
+{
+  "n_rows": 1500,
+  "source": "smoke",
+  "figures": {
+    "batch": {
+      "figure": "paper/figures/aet_by_batch.png",
+      "crossovers": {
+        "B =    1  (E_NN=4.20e-04 Wh/inst)": 164626.8615450482,
+        "B =   32  (E_NN=1.67e-05 Wh/inst)": 159217.23252631517,
+        "B =  128  (E_NN=6.92e-06 Wh/inst)": 170764.66579286676,
+        "B =  512  (E_NN=4.48e-06 Wh/inst)": 188998.1758527783,
+        "B = 1024  (E_NN=4.07e-06 Wh/inst)": 203362.68516302743
+      }
+    },
+    "hardware": {
+      "figure": "paper/figures/aet_by_hardware.png",
+      "crossovers": {
+        "consumer-gpu  (E_NN=2.72e-06 Wh/inst)": 242813.34519913731,
+        "datacenter-gpu  (E_NN=4.07e-06 Wh/inst)": 203362.68516302743
+      }
+    },
+    "delta": {
+      "figure": "paper/figures/aet_by_delta.png",
+      "crossovers": {
+        "$\\delta$ = 1%": 203362.68516302743,
+        "$\\delta$ = 2%": 203362.68516302743,
+        "$\\delta$ = 5%": 203362.68516302743,
+        "$\\delta$ = 10%": 203362.68516302743
+      }
+    },
+    "budget": {
+      "figure": "paper/figures/aet_by_budget.png",
+      "crossovers": {
+        "t=1s": 4068513.299478974,
+        "t=5s": 813490.5070039978,
+        "t=10s": 406731.9978353746,
+        "t=30s": 135574.38706809262,
+        "t=60s": 67786.82535108307,
+        "t=120s": 33893.32063055063
+      }
+    },
+    "combined": {
+      "figure": "paper/figures/aet_sensitivity_overview.png",
+      "crossovers": {
+        "batch": {
+          "B =    1": 164626.8615450482,
+          "B =   32": 159217.23252631517,
+          "B =  128": 170764.66579286676,
+          "B =  512": 188998.1758527783,
+          "B = 1024": 203362.68516302743
+        },
+        "hardware": {
+          "consumer-gpu": 242813.34519913731,
+          "datacenter-gpu": 203362.68516302743
+        },
+        "delta": {
+          "$\\delta$ = 1%": 203362.68516302743,
+          "$\\delta$ = 2%": 203362.68516302743,
+          "$\\delta$ = 5%": 203362.68516302743,
+          "$\\delta$ = 10%": 203362.68516302743
+        },
+        "budget": {
+          "t=1s": 4068513.299478974,
+          "t=5s": 813490.5070039978,
+          "t=10s": 406731.9978353746,
+          "t=30s": 135574.38706809262,
+          "t=60s": 67786.82535108307,
+          "t=120s": 33893.32063055063
+        }
+      }
+    },
+    "envelope": {
+      "figure": "paper/figures/aet_envelope.png",
+      "crossover_median": 200602.70101053047,
+      "aet_band_min": 30162.51735453207,
+      "aet_band_max": 4164335.1433351217,
+      "e_nn_median": 5.768229166666666e-06,
+      "e_meta_min": 0.0125,
+      "e_meta_med": 0.259375,
+      "e_meta_max": 1.7249999999999999
+    }
+  }
+}

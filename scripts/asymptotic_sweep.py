@@ -668,17 +668,18 @@ def plot_envelope(rows: list[dict], out_path: str) -> dict:
     nn_max = nn_cum.max(axis=0)
     nn_med = np.median(nn_cum, axis=0)
 
-    # HGS cumulative: take min/max over BOTH thread modes and budgets
-    meta_vals = []
-    for r in rows:
-        meta_vals.append(r["E_meta_wh_per_inst_mono"])
-        meta_vals.append(r["E_meta_wh_per_inst_multi"])
-    meta_arr = np.array([v for v in meta_vals if np.isfinite(v) and v > 0])
-    if meta_arr.size == 0:
-        meta_arr = np.array([1e-3])
-    e_meta_min = float(meta_arr.min())
-    e_meta_max = float(meta_arr.max())
-    e_meta_med = float(np.median(meta_arr))
+    # HGS cumulative: use multi-thread budgets only. Multi is the
+    # canonical deployment-regime baseline in the paper; mono is a
+    # sanity check that is reported separately in the anchors table
+    # and is intentionally excluded from the envelope so the band
+    # reports the spread practitioners actually face.
+    meta_vals_multi = [r["E_meta_wh_per_inst_multi"] for r in rows]
+    meta_arr_multi = np.array([v for v in meta_vals_multi if np.isfinite(v) and v > 0])
+    if meta_arr_multi.size == 0:
+        meta_arr_multi = np.array([1e-3])
+    e_meta_min = float(meta_arr_multi.min())
+    e_meta_max = float(meta_arr_multi.max())
+    e_meta_med = float(np.median(meta_arr_multi))
 
     meta_cum_min = e_meta_min * N
     meta_cum_max = e_meta_max * N

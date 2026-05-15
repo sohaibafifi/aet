@@ -167,6 +167,14 @@ def from_csv(csv_path: str) -> Optional[dict]:
     if feas.empty:
         sys.stderr.write("warn: no feasible rows in CSV\n")
         feas = df
+    # Multi-thread is the canonical baseline in the manuscript; mono is
+    # reported as a sanity check only. Use the multi-only median for
+    # e_meta so the asymptotic-curves figure and the envelope figure
+    # report the same crossover number.
+    if "threads_mode" in feas.columns and (feas["threads_mode"] == "multi").any():
+        meta_pool = feas[feas["threads_mode"] == "multi"]["E_meta_wh_per_inst"]
+    else:
+        meta_pool = feas["E_meta_wh_per_inst"]
     return {
         "e_train": float(pd.Series(feas["E_train_wh_median"]).median()),
         "e_train_p25": float(pd.Series(feas["E_train_wh_median"]).quantile(0.25))
@@ -174,7 +182,7 @@ def from_csv(csv_path: str) -> Optional[dict]:
         "e_train_p75": float(pd.Series(feas["E_train_wh_median"]).quantile(0.75))
         if "E_train_wh_median" in feas.columns else None,
         "e_nn": float(pd.Series(feas["E_NN_wh_per_inst"]).median()),
-        "e_meta": float(pd.Series(feas["E_meta_wh_per_inst"]).median()),
+        "e_meta": float(pd.Series(meta_pool).median()),
     }
 
 

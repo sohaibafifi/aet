@@ -6,9 +6,15 @@ This repository contains the code and configuration for the experiment described
 
 > **An Amortized Efficiency Threshold for Comparing Neural and Heuristic Solvers in Combinatorial Optimization**
 > Sohaib Afifi. Univ. Artois, UR 3926, LGI2A, France.
-> arXiv:[2605.14624](https://arxiv.org/abs/2605.14624)
+> arXiv:[2605.14624](https://arxiv.org/abs/2605.14624) - [local PDF](paper/arxiv/paper.pdf)
 
 The framework defines the deployment-volume threshold `AET` above which a neural solver breaks even with a heuristic baseline in total energy or carbon, under an explicit solution-quality constraint. The companion paper instantiates it on CVRP at `n=50` with the attention-based autoregressive solver of Kool et al. (2019), trained for 100 epochs on 20,000 instances over 5 random seeds, against HGS via PyVRP as the heuristic baseline.
+
+## Headline result
+
+![AET envelope on CVRP n=50](paper/figures/aet_envelope.png)
+
+Cumulative-energy envelope across the full sensitivity surface (batch size, hardware, quality tolerance, training seed, baseline thread mode, HGS time budget). Blue band: neural-side energy `E_train + N * E_NN_per_inst`. Red band: heuristic baseline `N * E_meta_per_inst`. Gray band: `AET` interval. Below the gray band the heuristic wins uniformly; above it the neural solver wins uniformly. Surface-median crossover `AET ~= 4.56 x 10^3` instances; band edges `7 x 10^2` (loosest HGS budget, t=120s) to `5.6 x 10^4` (tightest, t=1s) driven mostly by the HGS time budget.
 
 ---
 

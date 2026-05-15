@@ -1,0 +1,49 @@
+% Auto-generated subset of aet/energy/embodied.py:TABLE.
+% Full lookup table (45+ SKUs) lives in the released module; this
+% in-paper table keeps one representative entry per generation.
+\begin{table}[!htbp]
+\centering
+\footnotesize
+\begin{tabular}{llrl}
+\toprule
+\textbf{Hardware ID} & \textbf{Kind} & \textbf{kgCO$_2$eq} & \textbf{Source} \\
+\midrule
+\multicolumn{4}{l}{\emph{GPUs (datacenter)}} \\
+\texttt{nvidia-v100}      & GPU & 130.0 & Luccioni 2023~\cite{luccioni2023bloom} \\
+\texttt{nvidia-a100}      & GPU & 150.0 & Luccioni 2023~\cite{luccioni2023bloom} \\
+\texttt{nvidia-h100}      & GPU & 200.0 & Gupta 2021 extrap.~\cite{gupta2021chasing} \\
+\texttt{nvidia-h200}      & GPU & 215.0 & H100 + HBM3e (est.) \\
+\texttt{nvidia-b200}      & GPU & 400.0 & 2$\times$ reticle die (est.) \\
+\texttt{nvidia-gb200}     & GPU & 900.0 & 2$\times$ B200 + Grace (est.) \\
+\texttt{amd-mi250x}       & GPU & 140.0 & Dual MCM + HBM2e (est.) \\
+\texttt{amd-mi300x}       & GPU & 250.0 & 8 XCD + HBM3 (est.) \\
+\texttt{amd-mi350x}       & GPU & 300.0 & CDNA4 (est.) \\
+\midrule
+\multicolumn{4}{l}{\emph{GPUs (consumer)}} \\
+\texttt{nvidia-rtx-4090}  & GPU & 120.0 & Gupta 2021 extrap.~\cite{gupta2021chasing} \\
+\midrule
+\multicolumn{4}{l}{\emph{CPUs (server)}} \\
+\texttt{intel-xeon-8480}  & CPU & 65.0  & Sapphire Rapids (est.) \\
+\texttt{amd-epyc-9965}    & CPU & 85.0  & Turin, 192c chiplets (est.) \\
+\midrule
+\multicolumn{4}{l}{\emph{Apple Silicon SoC (sample)}} \\
+\texttt{apple-m1}         & SoC &  30.0 & Apple PER 2020~\cite{appleenv2023} \\
+\texttt{apple-m3-max}     & SoC &  85.0 & PER + die scaling \\
+\texttt{apple-m4}         & SoC &  36.0 & Apple PER 2024~\cite{appleenv2023} \\
+\texttt{apple-m5-max}     & SoC &  95.0 & PER + die scaling \\
+\midrule
+\multicolumn{4}{l}{\emph{Generic fallback}} \\
+\texttt{generic-gpu}      & GPU & 150.0 & midpoint \\
+\texttt{generic-cpu}      & CPU & 55.0  & midpoint \\
+\bottomrule
+\end{tabular}
+\caption{Representative subset of the embodied-carbon table used by the
+tracker. Full-lifetime fabrication emissions in kgCO$_2$eq are
+amortized linearly over a 5-year default lifetime. Recent NVIDIA,
+AMD, and Apple SKUs without published PER data are extrapolated from
+prior generations via the area + HBM-stack scaling of Gupta et
+al.~\cite{gupta2021chasing} and flagged ``(est.)''. The released
+module ships the complete lookup (45+ SKUs, including all M1--M5
+Pro/Max/Ultra variants and full Hopper/Blackwell/MI3xx lineups).}
+\label{tab:embodied}
+\end{table}
