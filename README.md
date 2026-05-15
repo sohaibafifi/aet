@@ -34,12 +34,17 @@ All dependencies (training stack, energy backends, HGS baseline, plotting) are i
 
 ## Quick start (CVRP n=50)
 
-The full pipeline reproduces every figure in the paper. Expect ~4 h on a single GPU + 24-core CPU (HGS baseline dominates wall time).
+The full pipeline reproduces every figure in the paper. Expect roughly:
+training ~4 h (5 seeds on a single GPU), HGS multi-thread budget sweep
+~2.6 h on a 24-core CPU, optional mono single-shot ~16 h, plus a few
+minutes of post-processing. Around 7 h end-to-end without the mono
+sanity run.
 
 ```bash
-# (1) Generate CVRP train / val / test instances (saved under data/cvrp/).
-#     rl4co also generates missing files on demand; the explicit call
-#     makes seeds and counts auditable.
+# (1) Generate CVRP test instances (saved under data/cvrp/).
+#     Training and validation samples are drawn fresh by rl4co at setup
+#     time and per epoch; only the test set is persisted so the neural
+#     solver and the HGS baseline see identical instances.
 python scripts/generate_data.py seed=1234
 
 # (2) Train the neural solver, 5 seeds
@@ -53,8 +58,19 @@ python scripts/aggregate_train_energy.py \
 # (4) Inference batch sweep (B in {1, 32, 128, 512, 1024})
 python -m cvrp.test
 
-# (5) HGS baseline via PyVRP, mono- and multi-threaded
-python -m cvrp.solvers solver_cfg.threads_mode=both
+# (5a) HGS baseline -- realistic deployment regime.
+#      Multi-thread, full budget sweep (one solver pass per budget in
+#      solver_cfg.runtime_sweep_s).
+python -m cvrp.solvers solver_cfg.threads_mode=multi
+
+# (5b) [OPTIONAL] HGS baseline -- pessimistic mono-thread sanity check.
+#      Single budget, no sweep. Just one data point to compare against
+#      the multi-thread numbers (per-instance energies should differ by
+#      only ~10-20% due to idle-power contamination, not by num_procs).
+python -m cvrp.solvers \
+    solver_cfg.threads_mode=mono \
+    solver_cfg.runtime_sweep_s=null \
+    solver_cfg.max_runtime_s=60
 
 # (6) Compute AET + sensitivity tables
 python scripts/aet_eval.py \
@@ -70,11 +86,10 @@ python scripts/asymptotic.py \
     --output-dir   paper/figures \
     --label        asymptotic
 
-# (8) Sensitivity sweep (paper Fig. 3-5)
+# (8) Sensitivity sweep figures (batch, hardware, delta, HGS budget)
 python scripts/asymptotic_sweep.py \
     --from-csv     paper/figures/aet_results.csv \
     --output-dir   paper/figures
-
 ```
 
 ---

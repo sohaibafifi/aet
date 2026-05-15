@@ -117,102 +117,133 @@ def solve(cfg: DictConfig) -> Optional[float]:
     fixed_runtime = solver_cfg.get("max_runtime_s")  # None | float
     size_to_time = dict(solver_cfg.get("size_to_time_s") or DEFAULT_SIZE_TO_TIME)
     size_to_time = {int(k): float(v) for k, v in size_to_time.items()}
+    runtime_sweep = solver_cfg.get("runtime_sweep_s")  # None | list[float]
 
     for file in (pbar := tqdm(data_files, desc="Solving with " + solver)):
         td_test = load_npz_to_tensordict(file)
         demand_key = "demand" if "demand" in td_test.keys() else "demand_linehaul"
         num_problems, size = td_test[demand_key].shape
-        if fixed_runtime is not None:
-            max_runtime = float(fixed_runtime)
+
+        # Resolve the list of per-instance budgets to sweep.
+        if runtime_sweep:
+            budgets = [float(b) for b in runtime_sweep]
+        elif fixed_runtime is not None:
+            budgets = [float(fixed_runtime)]
         else:
-            max_runtime = size_to_time.get(size - 1, max(size_to_time.values()))
+            budgets = [float(size_to_time.get(size - 1, max(size_to_time.values())))]
 
         for mode_name, num_procs in thread_modes:
-            sol_suffix = f"_{solver}_{mode_name}" if len(thread_modes) > 1 else f"_{solver}"
-            sol_path = file.replace(".npz", f"_sol{sol_suffix}.npz")
-            if os.path.exists(sol_path):
-                try:
-                    sol = load_npz_to_tensordict(sol_path)
-                    if (
-                        "actions" in sol
-                        and "costs" in sol
-                        and sol["costs"].shape[0] != num_problems
-                    ):
-                        log.error(f"num_problems mismatch for {sol_path}, rerunning...")
-                    if "actions" in sol and "costs" in sol:
-                        log.warning(f"Solution exists for {sol_path}, skipping...")
-                        log.info(f"{sol_path} average cost: {-sol['costs'].mean():.3f}")
-                        continue
-                except RuntimeError as e:
-                    log.error(f"Failed to load solution for {sol_path}: {e}, rerunning...")
-
-            print(42 * "=" + f"\nProcessing {file} [{mode_name}, {num_procs} procs]...")
-            print(
-                f"Estimated time : "
-                f"{max_runtime * num_problems / num_procs:.3f} s"
-            )
-            pbar.set_postfix_str(
-                f"{file} [{mode_name}] est: "
-                f"{max_runtime * num_problems / num_procs:.3f}s"
-            )
-
-            tracker = EnergyTracker(
-                label=f"baseline_{solver}_{mode_name}_{os.path.basename(file)}",
-                backend=energy_cfg.get("backend", "codecarbon"),
-                pue=energy_cfg.get("pue", 1.4),
-                hardware_id=hardware_id,
-                report_embodied=energy_cfg.get("report_embodied", True),
-                lifetime_s=energy_cfg.get("lifetime_s", None),
-                grid_intensity_g_per_kwh=energy_cfg.get("grid_intensity_g_per_kwh", 475.0),
-                country_iso_code=energy_cfg.get("country_iso_code", None),
-                output_dir=None,
-            )
-
-            start = time.time()
-            with tracker:
-                td_local = env.reset(td_test.clone())
-                actions_solver, costs_solver = env.solve(
-                    td_local,
-                    max_runtime=max_runtime,
-                    num_procs=num_procs,
-                    solver=solver,
+            for budget in budgets:
+                budget_tag = f"_t{int(round(budget))}" if len(budgets) > 1 else ""
+                sol_suffix = (
+                    f"_{solver}_{mode_name}{budget_tag}"
+                    if len(thread_modes) > 1 or len(budgets) > 1
+                    else f"_{solver}"
                 )
-                rewards_solver = env.get_reward(td_local.clone(), actions_solver)
-                tracker.n_items = int(num_problems)
-            total_time = time.time() - start
+                sol_path = file.replace(".npz", f"_sol{sol_suffix}.npz")
+                if os.path.exists(sol_path):
+                    try:
+                        sol = load_npz_to_tensordict(sol_path)
+                        if (
+                            "actions" in sol
+                            and "costs" in sol
+                            and sol["costs"].shape[0] != num_problems
+                        ):
+                            log.error(
+                                f"num_problems mismatch for {sol_path}, rerunning..."
+                            )
+                        if "actions" in sol and "costs" in sol:
+                            log.warning(f"Solution exists for {sol_path}, skipping...")
+                            log.info(
+                                f"{sol_path} average cost: {-sol['costs'].mean():.3f}"
+                            )
+                            continue
+                    except RuntimeError as e:
+                        log.error(
+                            f"Failed to load solution for {sol_path}: {e}, rerunning..."
+                        )
 
-            reading = tracker.reading.to_dict()
-            reading.update(
-                {
-                    "file": file,
-                    "solver": solver,
-                    "thread_mode": mode_name,
-                    "num_procs": int(num_procs),
-                    "num_problems": int(num_problems),
-                    "size": int(size),
-                    "max_runtime_s": float(max_runtime),
-                    "wall_total_s": float(total_time),
-                    "avg_cost": float(-rewards_solver.mean()),
-                }
-            )
-            energy_records.append(reading)
+                print(
+                    42 * "="
+                    + f"\nProcessing {file} [{mode_name}, {num_procs} procs, "
+                    f"t={budget:g}s]..."
+                )
+                print(
+                    f"Estimated time : "
+                    f"{budget * num_problems / num_procs:.3f} s"
+                )
+                pbar.set_postfix_str(
+                    f"{file} [{mode_name} t={budget:g}s] est: "
+                    f"{budget * num_problems / num_procs:.3f}s"
+                )
 
-            print(f"Time: {total_time:.3f} s | E={reading.get('energy_wh')} Wh | "
-                  f"CO2={reading.get('co2_g_total')} g")
-            print(f"Average cost: {-rewards_solver.mean():.3f}")
+                tracker = EnergyTracker(
+                    label=(
+                        f"baseline_{solver}_{mode_name}_t{int(round(budget))}_"
+                        f"{os.path.basename(file)}"
+                    ),
+                    backend=energy_cfg.get("backend", "codecarbon"),
+                    pue=energy_cfg.get("pue", 1.4),
+                    hardware_id=hardware_id,
+                    report_embodied=energy_cfg.get("report_embodied", True),
+                    lifetime_s=energy_cfg.get("lifetime_s", None),
+                    grid_intensity_g_per_kwh=energy_cfg.get(
+                        "grid_intensity_g_per_kwh", 475.0
+                    ),
+                    country_iso_code=energy_cfg.get("country_iso_code", None),
+                    output_dir=None,
+                )
 
-            out = TensorDict(
-                {
-                    "actions": actions_solver,
-                    "costs": costs_solver,
-                    "time": total_time,
-                    "energy_wh": float(reading.get("energy_wh") or 0.0),
-                    "co2_g": float(reading.get("co2_g_total") or 0.0),
-                    "num_procs": int(num_procs),
-                },
-                batch_size=[],
-            )
-            save_tensordict_to_npz(out, sol_path)
+                start = time.time()
+                with tracker:
+                    td_local = env.reset(td_test.clone())
+                    actions_solver, costs_solver = env.solve(
+                        td_local,
+                        max_runtime=budget,
+                        num_procs=num_procs,
+                        solver=solver,
+                    )
+                    rewards_solver = env.get_reward(td_local.clone(), actions_solver)
+                    tracker.n_items = int(num_problems)
+                total_time = time.time() - start
+
+                reading = tracker.reading.to_dict()
+                reading.update(
+                    {
+                        "file": file,
+                        "solver": solver,
+                        "thread_mode": mode_name,
+                        "num_procs": int(num_procs),
+                        "num_problems": int(num_problems),
+                        "size": int(size),
+                        "max_runtime_s": float(budget),
+                        "wall_total_s": float(total_time),
+                        "avg_cost": float(-rewards_solver.mean()),
+                    }
+                )
+                energy_records.append(reading)
+
+                print(
+                    f"Time: {total_time:.3f} s | "
+                    f"E={reading.get('energy_wh')} Wh | "
+                    f"CO2={reading.get('co2_g_total')} g | "
+                    f"budget={budget:g}s"
+                )
+                print(f"Average cost: {-rewards_solver.mean():.3f}")
+
+                out = TensorDict(
+                    {
+                        "actions":     actions_solver,
+                        "costs":       costs_solver,
+                        "time":        total_time,
+                        "energy_wh":   float(reading.get("energy_wh") or 0.0),
+                        "co2_g":       float(reading.get("co2_g_total") or 0.0),
+                        "num_procs":   int(num_procs),
+                        "max_runtime_s": float(budget),
+                    },
+                    batch_size=[],
+                )
+                save_tensordict_to_npz(out, sol_path)
 
     if energy_records:
         existing = []

@@ -356,6 +356,94 @@ def plot_by_delta(rows: list[dict], out_path: str) -> dict:
     return {"figure": out_path, "crossovers": crosses}
 
 
+def plot_by_budget(rows: list[dict], out_path: str) -> dict:
+    """One NN curve per (constant); one metaheuristic line per HGS budget.
+
+    The neural side is invariant to the HGS budget; what shifts is the
+    metaheuristic per-instance energy (which scales linearly with the
+    HGS budget at fixed thread count). We therefore plot a single NN
+    curve at the throughput plateau and overlay one metaheuristic line
+    per budget value, marking the crossover for each.
+    """
+    hw = _pick_default_hardware(rows)
+    budgets = sorted({
+        r["budget_s"] for r in rows
+        if isinstance(r.get("budget_s"), float) and r["budget_s"] == r["budget_s"]
+    })
+    if len(budgets) < 2:
+        # Single-budget run: nothing to sweep; emit a stub figure.
+        fig, ax = plt.subplots(figsize=(9, 6))
+        ax.text(0.5, 0.5,
+                "Budget sweep requires solver_cfg.runtime_sweep_s\n"
+                "with at least 2 values.",
+                ha="center", va="center", transform=ax.transAxes)
+        ax.axis("off")
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return {"figure": out_path, "crossovers": {}}
+
+    batches_seen = sorted({r["batch"] for r in rows})
+    plateau_batch = batches_seen[-1] if batches_seen else max(SMOKE_BATCHES)
+    held = [r for r in rows
+            if r["hardware"] == hw and r["batch"] == plateau_batch
+            and r["delta_pct"] == 1.0]
+    if not held:
+        held = [r for r in rows if r["hardware"] == hw and r["batch"] == plateau_batch]
+
+    # NN: one median curve.
+    e_train_samples = np.array([r["E_train_wh"] for r in held])
+    e_nn = float(np.median([r["E_NN_wh_per_inst"] for r in held]))
+    nn_curve = CurveSpec(
+        label=f"NN (B={plateau_batch}, E_NN={e_nn:.2e} Wh/inst)",
+        color="#1f77b4",
+        e_train_samples=e_train_samples,
+        e_nn_per_inst=e_nn,
+        feasible_share=float(np.mean([r["feasible"] for r in held])) if held else 1.0,
+    )
+
+    N = _n_grid()
+    fig, ax = plt.subplots(figsize=(9, 6))
+    e_train_med = float(np.median(e_train_samples))
+    nn_med = e_train_med + e_nn * N
+    ax.plot(N, nn_med, color=nn_curve.color, linewidth=2.0, label=nn_curve.label)
+
+    # Meta lines: one per budget (multi-thread baseline).
+    colors = _viridis_colors(len(budgets))
+    annotations: dict[str, float] = {}
+    for budget, color in zip(budgets, colors):
+        sub = [r for r in rows
+               if r["budget_s"] == budget and r["hardware"] == hw
+               and r["batch"] == plateau_batch]
+        if not sub:
+            continue
+        e_meta = float(np.median([r["E_meta_wh_per_inst_multi"] for r in sub]))
+        ax.plot(N, e_meta * N, linestyle="--", linewidth=1.4, color=color,
+                label=f"HGS multi, t={budget:g}s (E={e_meta:.2e} Wh/inst)")
+        denom = e_meta - e_nn
+        if denom > 0:
+            n_star = e_train_med / denom
+            if 1.0 <= n_star <= 1e10:
+                ax.plot([n_star], [e_meta * n_star], marker="o",
+                        color=color, markersize=7, markeredgecolor="black",
+                        markeredgewidth=0.6, zorder=5)
+                annotations[f"t={budget:g}s"] = float(n_star)
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("N (deployed instances)")
+    ax.set_ylabel("Cumulative energy (Wh)")
+    ax.set_title(
+        f"AET sensitivity: HGS time budget  "
+        f"(hardware = {hw}, batch = {plateau_batch}, multi-thread baseline)"
+    )
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend(fontsize=8, loc="upper left", framealpha=0.9)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return {"figure": out_path, "crossovers": annotations}
+
+
 # ----------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------
@@ -374,7 +462,10 @@ def _csv_to_rows(df) -> list[dict]:
     We pivot the threads_mode dimension into two columns
     (E_meta_wh_per_inst_mono, E_meta_wh_per_inst_multi).
     """
+    has_budget = "baseline_max_runtime_s" in df.columns
     key_cols = ["hardware_id", "batch_size", "delta_pct", "seed"]
+    if has_budget:
+        key_cols.append("baseline_max_runtime_s")
     required = {"hardware_id", "batch_size", "delta_pct", "seed",
                 "threads_mode", "E_meta_wh_per_inst",
                 "E_train_wh_median", "E_NN_wh_per_inst", "feasible"}
@@ -386,7 +477,11 @@ def _csv_to_rows(df) -> list[dict]:
 
     rows: list[dict] = []
     for keys, sub in df.groupby(key_cols):
-        hardware_id, batch_size, delta_pct, seed = keys
+        if has_budget:
+            hardware_id, batch_size, delta_pct, seed, budget = keys
+        else:
+            hardware_id, batch_size, delta_pct, seed = keys
+            budget = float("nan")
         sub_mono  = sub[sub["threads_mode"] == "mono"]
         sub_multi = sub[sub["threads_mode"] == "multi"]
         if sub_mono.empty and sub_multi.empty:
@@ -401,6 +496,7 @@ def _csv_to_rows(df) -> list[dict]:
             "batch":      int(batch_size),
             "delta_pct":  float(delta_pct),
             "seed":       int(seed),
+            "budget_s":   float(budget) if budget == budget else float("nan"),  # NaN-safe
             "E_train_wh": float(any_row["E_train_wh_median"]),
             "E_NN_wh_per_inst":         float(any_row["E_NN_wh_per_inst"]),
             "E_meta_wh_per_inst_mono":  meta_mono,
@@ -450,6 +546,8 @@ def main() -> int:
                                                       os.path.join(args.output_dir, "aet_by_hardware.png"))
     summary["figures"]["delta"]    = plot_by_delta(rows,
                                                    os.path.join(args.output_dir, "aet_by_delta.png"))
+    summary["figures"]["budget"]   = plot_by_budget(rows,
+                                                    os.path.join(args.output_dir, "aet_by_budget.png"))
 
     summary_path = os.path.join(args.output_dir, "aet_sweep_summary.json")
     with open(summary_path, "w") as f:

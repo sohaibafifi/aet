@@ -273,6 +273,9 @@ def build_aet_table(
                         "batch_size": inf.get("batch_size"),
                         "threads_mode": base.get("thread_mode"),
                         "num_procs": base.get("num_procs"),
+                        "baseline_max_runtime_s": float(
+                            base.get("max_runtime_s") or 0.0
+                        ),
                         "delta_pct": delta,
                         "nn_gap_pct": nn_gap,
                         "baseline_gap_pct": baseline_gap,

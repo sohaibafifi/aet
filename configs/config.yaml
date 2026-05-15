@@ -154,12 +154,16 @@ solver_cfg:
   threads_mode:     both           # mono | multi | both | default
   energy_log_path:  energy_baseline_pyvrp.json
 
-  # Per-instance HGS time budget (seconds).
-  # `max_runtime_s` -- single fixed budget for every file. Takes priority
-  #                   when non-null and disables the size-based lookup.
-  # `size_to_time_s` -- per-problem-size lookup (key = number of customers,
-  #                     value = seconds). Falls back to max(values) for
-  #                     unmapped sizes. Used when max_runtime_s is null.
+  # Per-instance HGS time budget (seconds). Precedence:
+  #   runtime_sweep_s > max_runtime_s > size_to_time_s lookup.
+  # `runtime_sweep_s` -- list of budgets to sweep. One solver pass per
+  #                      budget; solutions saved as *_t<budget>.npz.
+  #                      Set to null/empty to disable the sweep.
+  # `max_runtime_s`   -- single fixed budget. Used when runtime_sweep_s
+  #                      is empty.
+  # `size_to_time_s`  -- per-problem-size lookup (key = num_loc).
+  #                      Fallback when both above are null.
+  runtime_sweep_s: [1, 5, 10, 30, 60, 120]
   max_runtime_s:   60
   size_to_time_s:
     20:  10
